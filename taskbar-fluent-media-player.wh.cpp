@@ -28,6 +28,7 @@
 * **Mini Player Popup —** Bind the new "Open player menu" click action to any click type to pop open a compact popup showing album art, title/artist, and Play/Pause, Previous, Next, and Switch Session buttons. Choose in **Player Menu Settings** whether it opens directly above the media player, or at a fixed position on the screen (any corner/edge, with distance offsets and slide-in animation direction — like the Notifications placement mod).
 * **Audio Visualizer —** Real-time spectrum bars (WASAPI loopback + FFT) with 5 shapes (Stereo, Mountain, Mirror, Wave, Breathe), 5 color modes, 6 EQ presets, and full size/position/sensitivity control.
 * **Smart Behavior —** Auto-hides when there is no media, in full-screen, or after a configurable idle timeout. Shows again the moment playback resumes.
+* **Multiple Monitors —** Show the player on several taskbars at once (e.g. monitor `1, 2`), and optionally move it to another monitor while a fullscreen app covers its screen.
 
 ### Advanced Customization:
 * **Layout —** Mirror the entire player layout, set min/max width and height, control margins for each element independently.
@@ -114,17 +115,30 @@ If you encounter any issues or have a feature suggestion, please open a report o
       - "tray_hidden_icons_right": "Трей - Справа от скрытых значков"
       - "tray_after_showdesktop_left": "Трей - Слева от кнопки Показать рабочий стол"
       - "tray_after_showdesktop_right": "Трей - Справа от кнопки Показать рабочий стол"
-    - monitor: 1
+    - monitor: "1"
       $name: Monitor
       $name:ru-RU: Монитор
       $description: >-
         The monitor number the player will appear on (1, 2, 3...).
-        This number may differ from the monitor number shown in
-        Windows Display Settings.
+        Separate several numbers with commas to show the player on
+        several monitors at once, e.g. "1, 2". The numbers may differ
+        from the monitor numbers shown in Windows Display Settings.
       $description:ru-RU: >-
         Номер монитора, на котором будет отображаться плеер (1, 2, 3...).
-        Это число может отличаться от номера монитора в параметрах
-        экрана Windows.
+        Укажите несколько номеров через запятую, чтобы показать плеер
+        сразу на нескольких мониторах, например "1, 2". Номера могут
+        отличаться от номеров мониторов в параметрах экрана Windows.
+    - moveOnFullscreen: false
+      $name: Move to another monitor when a fullscreen app is running
+      $name:ru-RU: Перемещать на другой монитор при запущенном полноэкранном приложении
+      $description: >-
+        When fullscreen apps cover every monitor the player is shown on, the
+        player temporarily moves to the next monitor without a fullscreen app
+        and returns once the fullscreen app is closed.
+      $description:ru-RU: >-
+        Если полноэкранные приложения закрывают все мониторы с плеером, плеер
+        временно переносится на следующий монитор без полноэкранного приложения
+        и возвращается после закрытия полноэкранного приложения.
     - playerWidth: "0 0"
       $name: Media player width (min max)
       $name:ru-RU: Ширина медиаплеера (min max)
@@ -1246,7 +1260,7 @@ enum class VizColorMode { Solid, DynamicAlbum, DynamicGradient, CustomGradient, 
 enum class VizEQ { Default, Bass, Rock, Pop, Jazz, Electronic };
 enum class VizAnchor { Top, Middle, Bottom };
 struct ModSettings {
-    int          monitor              = 1;
+    std::vector<int> monitors         = {1};
     std::wstring position             = L"tray_left";
     std::wstring albumArtLeftClick    = L"none";
     std::wstring albumArtRightClick   = L"none";
@@ -1316,6 +1330,7 @@ struct ModSettings {
     int          textAreaLeftMargin   = 5;
     int          textAreaRightMargin  = 5;
     bool         hideFullscreen       = true;
+    bool         moveOnFullscreen     = false;
     int          idleHideSeconds      = 0;
     std::wstring backgroundType       = L"none";
     int          blurOpacity          = 65;
@@ -1555,7 +1570,24 @@ static void LoadSettings() {
         if (mode == L"off")   return L"off";
         return L"auto";
     };
-    g_settings.monitor               = std::max(1, Wh_GetIntSetting(L"MainSettings.PlayerSetting.monitor"));
+    {
+        // `monitor` keeps its original key but is now a comma-separated string.
+        // A value stored by an older version is an integer, read as a fallback.
+        // Windhawk's YAML editor still reports such a value as a type mismatch;
+        // see docs/multi-monitor-test-cases.md, Known issues.
+        g_settings.monitors.clear();
+        std::wstring list = StrAllowEmpty(L"MainSettings.PlayerSetting.monitor");
+        for (const wchar_t* p = list.c_str(); *p;) {
+            wchar_t* end = nullptr;
+            long n = wcstol(p, &end, 10);
+            if (end == p) { ++p; continue; }
+            if (n >= 1 && std::find(g_settings.monitors.begin(), g_settings.monitors.end(), (int)n) == g_settings.monitors.end())
+                g_settings.monitors.push_back((int)n);
+            p = end;
+        }
+        if (g_settings.monitors.empty())
+            g_settings.monitors.push_back(std::max(1, Wh_GetIntSetting(L"MainSettings.PlayerSetting.monitor")));
+    }
     g_settings.position             = Str(L"MainSettings.PlayerSetting.position",    L"tray_left");
     ParseMargin(L"MainSettings.PlayerSetting.playerMargin", L"4 4", g_settings.playerMarginLeft, g_settings.playerMarginRight);
     ParseMargin(L"MainSettings.PlayerSetting.playerWidth", L"0 0", g_settings.playerMinWidth, g_settings.playerMaxWidth);
@@ -1770,6 +1802,7 @@ static void LoadSettings() {
     }
     g_settings.hideWhenNoMedia      = Wh_GetIntSetting(L"BehaviorSettings.hideWhenNoMedia")   != 0;
     g_settings.hideFullscreen       = Wh_GetIntSetting(L"BehaviorSettings.hideFullscreen")    != 0;
+    g_settings.moveOnFullscreen     = Wh_GetIntSetting(L"MainSettings.PlayerSetting.moveOnFullscreen") != 0;
     g_settings.idleHideSeconds      = std::max(Wh_GetIntSetting(L"BehaviorSettings.idleHideSeconds"), 0);
     g_settings.playerHoverEffectMode = HoverMode(L"AppearanceSettings.BackgroundStyleSettings.enablePlayerHoverEffect");
     g_settings.mediaButtonsHoverEffectMode = HoverMode(L"AppearanceSettings.BackgroundStyleSettings.enableMediaButtonsHoverEffect");
@@ -2993,6 +3026,97 @@ struct TextScrollState {
 };
 static TextScrollState g_titleScroll;
 static TextScrollState g_artistScroll;
+// Player copies on additional monitors. The primary copy lives in the regular
+// globals; while an extra copy is being updated its state is swapped into them.
+struct PlayerSlot {
+    HWND taskbarWnd = nullptr;
+    Grid grid{nullptr};
+    FrameworkElement injectionParent{nullptr};
+    int playerColumn = -1;
+    std::function<void()> buttonStateUpdater;
+    ToolTip toolTip{nullptr};
+    FrameworkElement trackedElement{nullptr};
+    Thickness trackedElementOriginalMargin{};
+    bool hasTrackedElementOriginalMargin = false;
+    std::wstring trackPosition;
+    winrt::event_token layoutUpdateToken{};
+    std::wstring cachedAlbumTitle, cachedAlbumArtist, scrollCachedTitle, scrollCachedArtist;
+    std::vector<BYTE> cachedThumbnailBytes;
+    int cachedAppIconSize = -1;
+    BlurBgCache blurBgCache;
+    AlbumPalette cachedAlbumPalette = g_cachedAlbumPalette;
+    size_t cachedPaletteHash = 0;
+    TextScrollState titleScroll, artistScroll;
+    std::vector<winrt::Windows::UI::Xaml::Shapes::Rectangle> vizBars;
+    std::vector<SolidColorBrush> vizBrushes;
+};
+static void SwapPlayerSlotViz(PlayerSlot& s);
+[[clang::no_destroy]] static std::vector<std::unique_ptr<PlayerSlot>> g_extraSlots;
+static PlayerSlot* g_activeSlot = nullptr;
+// Taskbar that hosts the primary copy. Unlike g_taskbarWnd it is never rewritten
+// by the timer thread, so a destroyed host taskbar can be detected.
+static HWND g_playerHostWnd = nullptr;
+static void SwapPlayerSlot(PlayerSlot& s) {
+    std::swap(s.taskbarWnd, g_taskbarWnd);
+    std::swap(s.grid, g_playerGrid);
+    std::swap(s.injectionParent, g_injectionParent);
+    std::swap(s.playerColumn, g_playerColumn);
+    std::swap(s.buttonStateUpdater, g_playerButtonStateUpdater);
+    std::swap(s.toolTip, g_playerToolTip);
+    std::swap(s.trackedElement, g_trackedElement);
+    std::swap(s.trackedElementOriginalMargin, g_trackedElementOriginalMargin);
+    std::swap(s.hasTrackedElementOriginalMargin, g_hasTrackedElementOriginalMargin);
+    std::swap(s.trackPosition, g_trackPosition);
+    std::swap(s.layoutUpdateToken, g_layoutUpdateToken);
+    std::swap(s.cachedAlbumTitle, g_cachedAlbumTitle);
+    std::swap(s.cachedAlbumArtist, g_cachedAlbumArtist);
+    std::swap(s.scrollCachedTitle, g_scrollCachedTitle);
+    std::swap(s.scrollCachedArtist, g_scrollCachedArtist);
+    std::swap(s.cachedThumbnailBytes, g_cachedThumbnailBytes);
+    std::swap(s.cachedAppIconSize, g_cachedAppIconSize);
+    std::swap(s.blurBgCache, g_blurBgCache);
+    std::swap(s.cachedAlbumPalette, g_cachedAlbumPalette);
+    std::swap(s.cachedPaletteHash, g_cachedPaletteHash);
+    std::swap(s.titleScroll, g_titleScroll);
+    std::swap(s.artistScroll, g_artistScroll);
+    SwapPlayerSlotViz(s);
+}
+// Makes `target` (nullptr = primary copy) the current one for this scope.
+struct PlayerSlotScope {
+    PlayerSlot* target;
+    PlayerSlot* prev;
+    bool valid = true;
+    bool changed = false;
+    explicit PlayerSlotScope(PlayerSlot* t) : target(t), prev(g_activeSlot) {
+        if (t && std::none_of(g_extraSlots.begin(), g_extraSlots.end(),
+                              [t](const auto& s) { return s.get() == t; })) {
+            valid = false;
+            return;
+        }
+        if (t == prev) return;
+        if (prev) SwapPlayerSlot(*prev);
+        if (t) SwapPlayerSlot(*t);
+        g_activeSlot = t;
+        changed = true;
+    }
+    ~PlayerSlotScope() {
+        if (!changed) return;
+        if (target) SwapPlayerSlot(*target);
+        if (prev) SwapPlayerSlot(*prev);
+        g_activeSlot = prev;
+    }
+};
+template <typename F>
+static void ForEachExtraPlayer(F&& fn) {
+    if (g_activeSlot) return;
+    DWORD tid = GetCurrentThreadId();
+    for (size_t i = 0; i < g_extraSlots.size(); ++i) {
+        PlayerSlot* s = g_extraSlots[i].get();
+        if (!s->grid || !s->taskbarWnd || GetWindowThreadProcessId(s->taskbarWnd, nullptr) != tid) continue;
+        PlayerSlotScope scope(s);
+        try { fn(); } catch (...) {}
+    }
+}
 static void ResetScrollState(TextScrollState& s);
 static void FetchMediaPropertiesAsync();
 static void FetchPlaybackInfoAsync();
@@ -4136,7 +4260,15 @@ static void UpdateScrollTransforms();
 static void ScrollTimerTick(winrt::Windows::Foundation::IInspectable const&,
                             winrt::Windows::Foundation::IInspectable const&) {
     if (g_unloading || g_applyingSettings) return;
+    ForEachExtraPlayer([] {
+        int step = std::max(1, g_settings.scrollSpeed);
+        TickScrollState(g_titleScroll, step, g_settings.scrollPauseDuration, g_settings.scrollMode);
+        TickScrollState(g_artistScroll, step, g_settings.scrollPauseDuration, g_settings.scrollMode);
+        UpdateScrollTransforms();
+    });
     bool needsScroll = (g_titleScroll.active || g_artistScroll.active);
+    for (auto& s : g_extraSlots)
+        if (s->grid && (s->titleScroll.active || s->artistScroll.active)) needsScroll = true;
     if (!needsScroll) {
         if (g_scrollDispatcherTimer) {
             try { g_scrollDispatcherTimer.Stop(); } catch (...) {}
@@ -4302,6 +4434,11 @@ static void UpdateVisibility();
 static void RefreshThemeColors();
 static void RemovePlayerGrid();
 static bool InjectPlayerGrid();
+static bool PlayerGridsNeedSync();
+static std::vector<HWND> GetActiveTaskbars();
+static bool IsFullscreenOnMonitor(HMONITOR mon);
+static void SyncPlayerGrids(bool force);
+static void RemoveAllPlayerGrids();
 static std::atomic<bool> g_themeChangePending{false};
 static DWORD WINAPI TimerThreadProc(void*) {
     static bool lastThemeWasLight = IsSystemLightTheme();
@@ -4344,6 +4481,36 @@ static DWORD WINAPI TimerThreadProc(void*) {
                     }
                 }, nullptr);
             }
+        }
+        static ULONGLONG lastSyncCheck = 0;
+        if (GetTickCount64() - lastSyncCheck >= 500) {
+            lastSyncCheck = GetTickCount64();
+            // Fullscreen state of monitors that host a copy, recorded to refresh
+            // visibility when it changes without any media event.
+            static std::vector<HWND> lastFsTaskbars;
+            static std::vector<bool> lastFsState;
+            std::vector<HWND> fsTaskbars;
+            std::vector<bool> fsState;
+            if (g_settings.hideFullscreen || g_settings.moveOnFullscreen) {
+                fsTaskbars = GetActiveTaskbars();
+                for (HWND h : fsTaskbars)
+                    fsState.push_back(IsFullscreenOnMonitor(MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST)));
+            }
+            if (PlayerGridsNeedSync()) {
+                RunFromWindowThread(hWnd, [](void*) {
+                    if (g_unloading || g_applyingSettings) return;
+                    SyncPlayerGrids(false);
+                    RefreshPlayerContents();
+                    UpdateVisibility();
+                }, nullptr);
+            } else if (fsTaskbars == lastFsTaskbars && fsState != lastFsState) {
+                RunFromWindowThread(hWnd, [](void*) {
+                    if (g_unloading || g_applyingSettings) return;
+                    UpdateVisibility();
+                }, nullptr);
+            }
+            lastFsTaskbars = std::move(fsTaskbars);
+            lastFsState = std::move(fsState);
         }
         bool needsUpdate = g_needsUiUpdate.exchange(false);
         if (g_settings.idleHideSeconds > 0) {
@@ -4821,6 +4988,12 @@ static void UpdateVisualizerPeaks() {
 using VizRect = winrt::Windows::UI::Xaml::Shapes::Rectangle;
 [[clang::no_destroy]] static std::optional<std::vector<VizRect>> g_vizBars{std::in_place};
 [[clang::no_destroy]] static std::optional<std::vector<SolidColorBrush>> g_vizBrushes{std::in_place};
+static void SwapPlayerSlotViz(PlayerSlot& s) {
+    if (g_vizBars && g_vizBrushes) {
+        std::swap(s.vizBars, *g_vizBars);
+        std::swap(s.vizBrushes, *g_vizBrushes);
+    }
+}
 static winrt::Windows::UI::Color VizLerpColor(winrt::Windows::UI::Color a,
                                             winrt::Windows::UI::Color b, float t) {
     auto L = [](BYTE x, BYTE y, float tt) -> BYTE {
@@ -4854,10 +5027,10 @@ static double VizZoneHeight() {
         h = std::min(h, (double)g_settings.playerMaxHeight);
     return h;
 }
-static void VizApplyFrame() {
+static void VizApplyFrame(bool advance = true) {
     if (!g_settings.vizEnabled || g_vizBars->empty())
         return;
-    UpdateVisualizerPeaks();
+    if (advance) UpdateVisualizerPeaks();
     float attack = 0.55f, decay = 0.18f;
     float sensBoost = std::max(0.f, (g_settings.vizSensitivity - 100) / 200.f) * 0.12f;
     switch (g_settings.vizShape) {
@@ -4911,7 +5084,7 @@ static void VizApplyFrame() {
             else                  { a = 0.92f; d = 0.34f + sensBoost; }
         }
         float next = cur + (tgt - cur) * ((tgt > cur) ? a : d);
-        g_VizPeak[i] = (fabsf(next - cur) > 0.0005f) ? next : tgt;
+        if (advance) g_VizPeak[i] = (fabsf(next - cur) > 0.0005f) ? next : tgt;
         float fac = std::max(0.f, g_VizPeak[i]);
         double bh = idleHidden
             ? (fac * maxBH)
@@ -4943,6 +5116,7 @@ static void VizTimerTick(winrt::Windows::Foundation::IInspectable const&,
     if (g_unloading || g_applyingSettings) return;
     if (!g_settings.vizEnabled) return;
     VizApplyFrame();
+    ForEachExtraPlayer([] { VizApplyFrame(false); });
 }
 static void StartVizTimer() {
     HWND hWnd = g_taskbarWnd;
@@ -5093,6 +5267,7 @@ static void StopTimerThread() {
     if (g_timerUpdateEvent) { CloseHandle(g_timerUpdateEvent); g_timerUpdateEvent = nullptr; }
 }
 static void RefreshThemeColors() {
+    ForEachExtraPlayer([] { RefreshThemeColors(); });
     if (!g_playerGrid || g_unloading || g_applyingSettings) return;
     g_vizBaseColorDirty = true;
     g_vizPaletteColorsDirty = true;
@@ -5157,20 +5332,6 @@ static void RefreshThemeColors() {
         }
     } catch (...) {}
 }
-static HMONITOR GetMonitorByNumber(int monitorNumber) {
-    HMONITOR result = nullptr;
-    int current = 0;
-    struct Ctx { int target; HMONITOR* result; int* current; };
-    Ctx ctx{monitorNumber - 1, &result, &current};
-    EnumDisplayMonitors(nullptr, nullptr,
-        [](HMONITOR hMon, HDC, LPRECT, LPARAM lp) CALLBACK -> BOOL {
-            auto* c = reinterpret_cast<Ctx*>(lp);
-            if (*c->current == c->target) { *c->result = hMon; return FALSE; }
-            (*c->current)++;
-            return TRUE;
-        }, reinterpret_cast<LPARAM>(&ctx));
-    return result;
-}
 static HWND FindTaskbarWndForMonitor(HMONITOR targetMonitor) {
     struct Ctx { HMONITOR target; HWND result; };
     Ctx ctx{targetMonitor, nullptr};
@@ -5191,13 +5352,73 @@ static HWND FindTaskbarWndForMonitor(HMONITOR targetMonitor) {
     }, reinterpret_cast<LPARAM>(&ctx));
     return ctx.result;
 }
-static HWND FindCurrentProcessTaskbarWnd() {
-    if (HMONITOR mon = GetMonitorByNumber(g_settings.monitor)) {
-        if (HWND hWnd = FindTaskbarWndForMonitor(mon)) {
-            return hWnd;
-        }
-    } else {
+// A monitor counts as fullscreen when the topmost window touching it (ignoring
+// small always-on-top windows) covers the whole monitor. Visible frame bounds are
+// used, because the window rect of a maximized window includes invisible resize
+// borders that reach into the neighbouring monitor.
+static bool IsFullscreenOnMonitor(HMONITOR mon) {
+    MONITORINFO mi{sizeof(mi)};
+    if (!mon || !GetMonitorInfoW(mon, &mi)) return false;
+    struct Ctx { RECT mr; bool result; };
+    Ctx ctx{mi.rcMonitor, false};
+    EnumWindows([](HWND hWnd, LPARAM lp) CALLBACK -> BOOL {
+        auto* c = reinterpret_cast<Ctx*>(lp);
+        if (!IsWindowVisible(hWnd) || IsIconic(hWnd)) return TRUE;
+        BOOL cloaked = FALSE;
+        if (SUCCEEDED(DwmGetWindowAttribute(hWnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked) return TRUE;
+        LONG_PTR ex = GetWindowLongPtrW(hWnd, GWL_EXSTYLE);
+        if (ex & (WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT)) return TRUE;
+        wchar_t cls[64] = {};
+        GetClassNameW(hWnd, cls, ARRAYSIZE(cls));
+        if (!_wcsicmp(cls, L"Progman") || !_wcsicmp(cls, L"WorkerW") ||
+            !_wcsicmp(cls, L"Shell_TrayWnd") || !_wcsicmp(cls, L"Shell_SecondaryTrayWnd")) return TRUE;
+        RECT wr{}, overlap{};
+        if (FAILED(DwmGetWindowAttribute(hWnd, DWMWA_EXTENDED_FRAME_BOUNDS, &wr, sizeof(wr))) &&
+            !GetWindowRect(hWnd, &wr)) return TRUE;
+        if (!IntersectRect(&overlap, &wr, &c->mr)) return TRUE;
+        bool covers = wr.left <= c->mr.left && wr.top <= c->mr.top &&
+                      wr.right >= c->mr.right && wr.bottom >= c->mr.bottom;
+        bool maximizedWithCaption = IsZoomed(hWnd) &&
+            (GetWindowLongPtrW(hWnd, GWL_STYLE) & WS_CAPTION) == WS_CAPTION;
+        if (covers && !maximizedWithCaption) { c->result = true; return FALSE; }
+        return (ex & WS_EX_TOPMOST) ? TRUE : FALSE;
+    }, reinterpret_cast<LPARAM>(&ctx));
+    return ctx.result;
+}
+// Taskbars that should host a player: the first one is the primary copy.
+static std::vector<HWND> GetDesiredTaskbars() {
+    std::vector<HMONITOR> mons;
+    EnumDisplayMonitors(nullptr, nullptr, [](HMONITOR m, HDC, LPRECT, LPARAM lp) CALLBACK -> BOOL {
+        reinterpret_cast<std::vector<HMONITOR>*>(lp)->push_back(m);
+        return TRUE;
+    }, reinterpret_cast<LPARAM>(&mons));
+    std::vector<HWND> result;
+    DWORD tid = 0;
+    for (int n : g_settings.monitors) {
+        if (n < 1 || n > (int)mons.size()) continue;
+        HWND h = FindTaskbarWndForMonitor(mons[n - 1]);
+        if (!h || std::find(result.begin(), result.end(), h) != result.end()) continue;
+        DWORD t = GetWindowThreadProcessId(h, nullptr);
+        if (tid && t != tid) continue;
+        tid = t;
+        result.push_back(h);
     }
+    if (!g_settings.moveOnFullscreen || result.empty()) return result;
+    for (HWND h : result)
+        if (!IsFullscreenOnMonitor(MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST))) return result;
+    size_t start = std::find(mons.begin(), mons.end(),
+        MonitorFromWindow(result[0], MONITOR_DEFAULTTONEAREST)) - mons.begin();
+    for (size_t i = 1; i < mons.size(); ++i) {
+        HMONITOR m = mons[(start + i) % mons.size()];
+        if (IsFullscreenOnMonitor(m)) continue;
+        HWND h = FindTaskbarWndForMonitor(m);
+        if (h && GetWindowThreadProcessId(h, nullptr) == tid) return {h};
+    }
+    return result;
+}
+static HWND FindCurrentProcessTaskbarWnd() {
+    auto desired = GetDesiredTaskbars();
+    if (!desired.empty()) return desired[0];
     HWND result = nullptr;
     EnumWindows([](HWND hWnd, LPARAM lp) CALLBACK -> BOOL {
         DWORD pid = 0; wchar_t cls[32] = {};
@@ -5804,11 +6025,11 @@ static void ShowMediaContextMenu(FrameworkElement const& target) {
                 try {
                     StopVizTimer();
                     g_vizCurrentlyVisible = false;
-                    RemovePlayerGrid();
+                    RemoveAllPlayerGrids();
                     auto dispatcher = winrt::Windows::UI::Core::CoreWindow::GetForCurrentThread().Dispatcher();
                     dispatcher.RunAsync(winrt::Windows::UI::Core::CoreDispatcherPriority::Normal, [=]() {
                         try {
-                            InjectPlayerGrid();
+                            SyncPlayerGrids(true);
                         } catch (...) {
                             Wh_Log(L"Restart Player: Exception in InjectPlayerGrid");
                         }
@@ -8876,7 +9097,9 @@ static bool InjectPlayerGrid() {
                             startButtonOffset = GetStartButtonAdjustment(root);
                         }
                         g_layoutUpdateToken = targetGrid.LayoutUpdated(
-                            [targetGrid, startButtonModActiveMod, startButtonOffset](winrt::Windows::Foundation::IInspectable const&, winrt::Windows::Foundation::IInspectable const&) {
+                            [targetGrid, startButtonModActiveMod, startButtonOffset, ownerSlot = g_activeSlot](winrt::Windows::Foundation::IInspectable const&, winrt::Windows::Foundation::IInspectable const&) {
+                                PlayerSlotScope slotScope(ownerSlot);
+                                if (!slotScope.valid) return;
                                 try {
                                     if (!g_playerGrid || !g_trackedElement || g_unloading) return;
                                     UpdateAnchorDebugOverlay(targetGrid, g_trackedElement);
@@ -8974,6 +9197,7 @@ static bool InjectPlayerGrid() {
         }
         g_playerGrid      = playerGrid;
         g_injectionParent = targetGrid;
+        if (!g_activeSlot) g_playerHostWnd = hWnd;
         RefreshPlayerContents();
         g_playerGrid.Visibility(Visibility::Visible);
         g_playerGrid.UpdateLayout();
@@ -8995,7 +9219,7 @@ static bool InjectPlayerGrid() {
             }
         }
         Canvas::SetZIndex(g_playerGrid, 1000);
-        OnSessionsChanged();
+        if (!g_activeSlot) OnSessionsChanged();
         g_needsUiUpdate = true;
         return true;
     } catch (...) {
@@ -9006,12 +9230,14 @@ static bool InjectPlayerGrid() {
 static void RemovePlayerGrid() {
     if (!g_injectionParent) return;
     try {
-        if (g_miniPlayerFlyoutOpen && g_miniPlayerFlyout) {
-            g_miniPlayerExplicitCloseRequested.store(true);
-            try { g_miniPlayerFlyout.Hide(); } catch (...) {}
+        if (!g_activeSlot) {
+            if (g_miniPlayerFlyoutOpen && g_miniPlayerFlyout) {
+                g_miniPlayerExplicitCloseRequested.store(true);
+                try { g_miniPlayerFlyout.Hide(); } catch (...) {}
+            }
+            g_miniPlayerFlyout = nullptr;
+            g_miniPlayerFlyoutOpen = false;
         }
-        g_miniPlayerFlyout = nullptr;
-        g_miniPlayerFlyoutOpen = false;
     } catch (...) {}
     try {
         if (g_layoutUpdateToken.value) {
@@ -9078,16 +9304,18 @@ static void RemovePlayerGrid() {
         g_scrollCachedArtist.clear();
         ResetScrollState(g_titleScroll);
         ResetScrollState(g_artistScroll);
-        g_miniPlayerArtRef            = nullptr;
-        g_miniPlayerTitleRef          = nullptr;
-        g_miniPlayerArtistRef         = nullptr;
-        g_miniPlayerPlayBtnRef        = nullptr;
-        g_miniPlayerPrevBtnRef        = nullptr;
-        g_miniPlayerNextBtnRef        = nullptr;
-        g_miniPlayerShuffleBtnRef     = nullptr;
-        g_miniPlayerRepeatBtnRef      = nullptr;
-        g_miniPlayerSessionListRef    = nullptr;
-        g_miniPlayerSessionListSepRef = nullptr;
+        if (!g_activeSlot) {
+            g_miniPlayerArtRef            = nullptr;
+            g_miniPlayerTitleRef          = nullptr;
+            g_miniPlayerArtistRef         = nullptr;
+            g_miniPlayerPlayBtnRef        = nullptr;
+            g_miniPlayerPrevBtnRef        = nullptr;
+            g_miniPlayerNextBtnRef        = nullptr;
+            g_miniPlayerShuffleBtnRef     = nullptr;
+            g_miniPlayerRepeatBtnRef      = nullptr;
+            g_miniPlayerSessionListRef    = nullptr;
+            g_miniPlayerSessionListSepRef = nullptr;
+        }
     } catch (...) {
         g_playerGrid      = nullptr;
         g_injectionParent = nullptr;
@@ -9102,19 +9330,22 @@ static void RemovePlayerGrid() {
         g_cachedAppIconSize = -1;
         ResetScrollState(g_titleScroll);
         ResetScrollState(g_artistScroll);
-        g_miniPlayerArtRef            = nullptr;
-        g_miniPlayerTitleRef          = nullptr;
-        g_miniPlayerArtistRef         = nullptr;
-        g_miniPlayerPlayBtnRef        = nullptr;
-        g_miniPlayerPrevBtnRef        = nullptr;
-        g_miniPlayerNextBtnRef        = nullptr;
-        g_miniPlayerShuffleBtnRef     = nullptr;
-        g_miniPlayerRepeatBtnRef      = nullptr;
-        g_miniPlayerSessionListRef    = nullptr;
-        g_miniPlayerSessionListSepRef = nullptr;
+        if (!g_activeSlot) {
+            g_miniPlayerArtRef            = nullptr;
+            g_miniPlayerTitleRef          = nullptr;
+            g_miniPlayerArtistRef         = nullptr;
+            g_miniPlayerPlayBtnRef        = nullptr;
+            g_miniPlayerPrevBtnRef        = nullptr;
+            g_miniPlayerNextBtnRef        = nullptr;
+            g_miniPlayerShuffleBtnRef     = nullptr;
+            g_miniPlayerRepeatBtnRef      = nullptr;
+            g_miniPlayerSessionListRef    = nullptr;
+            g_miniPlayerSessionListSepRef = nullptr;
+        }
     }
 }
 static void RefreshPlayerContents() {
+    ForEachExtraPlayer([] { RefreshPlayerContents(); });
     if (!g_playerGrid || g_unloading || g_applyingSettings) return;
     std::wstring      title, artist;
     bool              isPlaying = false, hasMedia = false;
@@ -9895,23 +10126,12 @@ static void RefreshPlayerContents() {
     } catch (...) {}
     RefreshMiniPlayerFlyoutUI();
 }
-static bool IsFullscreenActive() {
-    using Fn = HRESULT(WINAPI*)(int*);
-    static Fn pfn = nullptr; static bool tried = false;
-    if (!tried) {
-        tried = true;
-        HMODULE h = GetModuleHandleW(L"shell32.dll");
-        if (!h) h = LoadLibraryW(L"shell32.dll");
-        if (h) pfn = (Fn)GetProcAddress(h, (LPCSTR)2573);
-    }
-    if (!pfn) return false;
-    int s = 0;
-    return SUCCEEDED(pfn(&s)) && (s == 2 || s == 3 || s == 4);
-}
 static void UpdateVisibility() {
+    ForEachExtraPlayer([] { UpdateVisibility(); });
     if (!g_playerGrid || g_unloading || g_applyingSettings) return;
     bool hide = false;
-    if (g_settings.hideFullscreen && IsFullscreenActive()) hide = true;
+    if ((g_settings.hideFullscreen || g_settings.moveOnFullscreen) &&
+        IsFullscreenOnMonitor(MonitorFromWindow(g_taskbarWnd, MONITOR_DEFAULTTONEAREST))) hide = true;
     if (!hide && g_hiddenByIdle) hide = true;
     if (!hide) {
         bool hasMedia = false, hasSession = false;
@@ -9955,10 +10175,12 @@ static void UpdateVisibility() {
                                     g_settings.position == L"taskbar_far_edge_left");
             if (hide && isTrackingPosition && g_settings.enableSmoothPositionAnimation) {
                 g_playerGrid.Opacity(0.0);
-                SpawnTrackedWorker([]() {
+                SpawnTrackedWorker([owner = g_activeSlot]() {
                     std::this_thread::sleep_for(std::chrono::milliseconds(200));
                     try {
                         RunFromWindowThread(g_taskbarWnd, [](void* param) {
+                            PlayerSlotScope slotScope(static_cast<PlayerSlot*>(param));
+                            if (!slotScope.valid) return;
                             try {
                                 if (g_playerGrid) {
                                     g_playerGrid.Visibility(Visibility::Collapsed);
@@ -9975,7 +10197,7 @@ static void UpdateVisibility() {
                                     g_playerGrid.Width(0);
                                 }
                             } catch (...) {}
-                        }, nullptr);
+                        }, owner);
                     } catch (...) {}
                 });
             } else {
@@ -10015,8 +10237,13 @@ static void UpdateVisibility() {
             }
         }
         g_playerGrid.UpdateLayout();
-        if (g_settings.vizEnabled) {
-            bool nowVisible = !hide;
+        bool anyCopyVisible = !hide;
+        if (!g_activeSlot) {
+            for (auto& s : g_extraSlots)
+                if (s->grid && s->grid.Visibility() == Visibility::Visible) anyCopyVisible = true;
+        }
+        if (g_settings.vizEnabled && !g_activeSlot) {
+            bool nowVisible = anyCopyVisible;
             if (nowVisible && !g_vizCurrentlyVisible) {
                 g_vizCurrentlyVisible = true;
                 StartVizCaptureThread();
@@ -10028,19 +10255,139 @@ static void UpdateVisibility() {
             }
         }
         
-        if (g_settings.enableTitleScrolling || g_settings.enableArtistScrolling) {
-            if (hide) StopScrollTimer();
-            else      StartScrollTimer();
+        if ((g_settings.enableTitleScrolling || g_settings.enableArtistScrolling) && !g_activeSlot) {
+            if (anyCopyVisible) StartScrollTimer();
+            else            StopScrollTimer();
         }
     } catch (...) {}
+}
+[[clang::no_destroy]] static std::mutex g_activeTaskbarsMtx;
+[[clang::no_destroy]] static std::vector<HWND> g_activeTaskbars;
+// `attemptedPrimary` is recorded even if its injection failed, so a failed move
+// is retried only when the desired monitors change again, not on every tick.
+static void UpdateActiveTaskbars(HWND attemptedPrimary = nullptr) {
+    std::vector<HWND> list;
+    if (g_playerGrid || attemptedPrimary) {
+        list.push_back(g_playerGrid ? g_playerHostWnd : attemptedPrimary);
+        for (auto& s : g_extraSlots)
+            if (s->grid) list.push_back(s->taskbarWnd);
+    }
+    std::lock_guard<std::mutex> lk(g_activeTaskbarsMtx);
+    g_activeTaskbars = std::move(list);
+}
+// Extra copies whose injection failed; retried with a growing delay instead of
+// on every timer tick. Guarded by g_activeTaskbarsMtx.
+struct FailedInjection { HWND taskbarWnd; ULONGLONG retryAt; int attempts; };
+[[clang::no_destroy]] static std::vector<FailedInjection> g_failedInjections;
+static std::vector<HWND> GetActiveTaskbars() {
+    std::lock_guard<std::mutex> lk(g_activeTaskbarsMtx);
+    return g_activeTaskbars;
+}
+static bool PlayerGridsNeedSync() {
+    if (!g_settings.moveOnFullscreen && g_settings.monitors.size() < 2) return false;
+    auto desired = GetDesiredTaskbars();
+    std::vector<HWND> active;
+    {
+        std::lock_guard<std::mutex> lk(g_activeTaskbarsMtx);
+        active = g_activeTaskbars;
+        ULONGLONG now = GetTickCount64();
+        for (auto& f : g_failedInjections)
+            if (!active.empty() && now < f.retryAt && desired.size() > 1 &&
+                std::find(desired.begin() + 1, desired.end(), f.taskbarWnd) != desired.end())
+                active.push_back(f.taskbarWnd);
+    }
+    if (desired.empty() || active.empty()) return false;
+    if (desired[0] != active[0]) return true;
+    std::sort(desired.begin() + 1, desired.end());
+    std::sort(active.begin() + 1, active.end());
+    return desired != active;
+}
+static void RemoveAllPlayerGrids() {
+    if (g_activeSlot) return;
+    for (auto& s : g_extraSlots) {
+        PlayerSlotScope scope(s.get());
+        try { RemovePlayerGrid(); } catch (...) {}
+    }
+    g_extraSlots.clear();
+    RemovePlayerGrid();
+    UpdateActiveTaskbars();
+}
+static void SyncPlayerGrids(bool force) {
+    if (g_activeSlot) return;
+    auto targets = GetDesiredTaskbars();
+    if (targets.empty()) {
+        HWND h = FindCurrentProcessTaskbarWnd();
+        if (!h) return;
+        targets.push_back(h);
+    }
+    if (g_playerGrid && !IsWindow(g_playerHostWnd)) {
+        // The host taskbar is gone together with its XAML tree: drop references only.
+        g_playerGrid = nullptr;
+        g_injectionParent = nullptr;
+        g_playerColumn = -1;
+        g_trackedElement = nullptr;
+        g_hasTrackedElementOriginalMargin = false;
+        g_trackPosition = L"";
+        g_layoutUpdateToken = {};
+    }
+    if (force) {
+        std::lock_guard<std::mutex> lk(g_activeTaskbarsMtx);
+        g_failedInjections.clear();
+    }
+    if (force || !g_playerGrid || g_playerHostWnd != targets[0]) {
+        RemoveAllPlayerGrids();
+        g_taskbarWnd = targets[0];
+        InjectPlayerGrid();
+    }
+    for (size_t i = 0; i < g_extraSlots.size();) {
+        PlayerSlot* s = g_extraSlots[i].get();
+        bool alive = IsWindow(s->taskbarWnd);
+        if (s->grid && alive &&
+            std::find(targets.begin() + 1, targets.end(), s->taskbarWnd) != targets.end()) { ++i; continue; }
+        if (alive) { PlayerSlotScope scope(s); try { RemovePlayerGrid(); } catch (...) {} }
+        g_extraSlots.erase(g_extraSlots.begin() + i);
+    }
+    DWORD tid = GetCurrentThreadId();
+    for (size_t i = 1; i < targets.size(); ++i) {
+        HWND h = targets[i];
+        if (h == g_taskbarWnd || GetWindowThreadProcessId(h, nullptr) != tid ||
+            std::any_of(g_extraSlots.begin(), g_extraSlots.end(),
+                        [h](const auto& s) { return s->taskbarWnd == h; })) continue;
+        {
+            std::lock_guard<std::mutex> lk(g_activeTaskbarsMtx);
+            auto f = std::find_if(g_failedInjections.begin(), g_failedInjections.end(),
+                                  [h](const auto& x) { return x.taskbarWnd == h; });
+            if (f != g_failedInjections.end() && GetTickCount64() < f->retryAt) continue;
+        }
+        g_extraSlots.push_back(std::make_unique<PlayerSlot>());
+        PlayerSlot* s = g_extraSlots.back().get();
+        s->taskbarWnd = h;
+        bool ok = false;
+        { PlayerSlotScope scope(s); try { ok = InjectPlayerGrid(); } catch (...) {} }
+        if (!ok) g_extraSlots.pop_back();
+        std::lock_guard<std::mutex> lk(g_activeTaskbarsMtx);
+        auto f = std::find_if(g_failedInjections.begin(), g_failedInjections.end(),
+                              [h](const auto& x) { return x.taskbarWnd == h; });
+        if (ok) {
+            if (f != g_failedInjections.end()) g_failedInjections.erase(f);
+        } else {
+            if (f == g_failedInjections.end())
+                f = g_failedInjections.insert(g_failedInjections.end(), {h, 0, 0});
+            f->attempts = std::min(f->attempts + 1, 6);
+            f->retryAt = GetTickCount64() + (1000ULL << f->attempts);  // 2 s .. 64 s
+            Wh_Log(L"SyncPlayerGrids: injection into extra taskbar failed, retry in %llu ms",
+                   1000ULL << f->attempts);
+        }
+    }
+    UpdateActiveTaskbars(targets[0]);
 }
 static void ApplySettings() {
     g_idleSeconds  = 0;
     g_idleTicks    = 0;
     g_hiddenByIdle = false;
-    try { RemovePlayerGrid(); } catch (...) { Wh_Log(L"ApplySettings: Exception in RemovePlayerGrid"); }
+    try { RemoveAllPlayerGrids(); } catch (...) { Wh_Log(L"ApplySettings: Exception in RemovePlayerGrid"); }
     if (!g_unloading) {
-        try { InjectPlayerGrid(); } catch (...) { Wh_Log(L"ApplySettings: Exception in InjectPlayerGrid"); }
+        try { SyncPlayerGrids(true); } catch (...) { Wh_Log(L"ApplySettings: Exception in InjectPlayerGrid"); }
     }
 }
 static void ApplySettingsWithRetry(FrameworkElement xamlRootContent, int retryCount = 0) {
@@ -10098,6 +10445,8 @@ static void WINAPI TrayUI_StartTaskbar_Hook(void* pThis) {
     g_hasTrackedElementOriginalMargin = false;
     g_trackPosition   = L"";
     g_layoutUpdateToken = {};
+    g_extraSlots.clear();
+    UpdateActiveTaskbars();
     g_taskbarWnd = hWnd;
     g_cachedAlbumTitle.clear();
     g_cachedAlbumArtist.clear();
@@ -10209,7 +10558,7 @@ void Wh_ModUninit() {
     WaitForTrackedWorkers();
     if (g_taskbarWnd)
         RunFromWindowThread(g_taskbarWnd, [](void*) {
-            RemovePlayerGrid();
+            RemoveAllPlayerGrids();
             g_mediaHoverBrush   = nullptr;
             g_mediaPressedBrush = nullptr;
             g_playerHoverBrush  = nullptr;
@@ -10255,18 +10604,19 @@ void Wh_ModSettingsChanged() {
         g_taskbarWnd = hWnd;
         bool ok = RunFromWindowThread(hWnd, [](void*) {
             try {
-                RemovePlayerGrid();
+                RemoveAllPlayerGrids();
                 g_cachedAlbumTitle.clear();
                 g_cachedAlbumArtist.clear();
                 g_cachedThumbnailBytes.clear();
                 g_cachedPaletteHash = 0;
                 g_blurBgCache.Invalidate();
                 if (!g_unloading) {
-                    InjectPlayerGrid();
+                    SyncPlayerGrids(true);
                     g_needsUiUpdate = true;
                 }
             } catch (...) {
                 Wh_Log(L"Wh_ModSettingsChanged: Exception during RemovePlayerGrid/InjectPlayerGrid");
+                g_extraSlots.clear();
                 g_playerGrid = nullptr;
                 g_injectionParent = nullptr;
             }

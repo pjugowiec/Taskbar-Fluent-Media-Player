@@ -34,6 +34,7 @@
 * **Mini Player Popup —** Bind the new "Open player menu" click action to any click type to pop open a compact popup showing album art, title/artist, and Play/Pause, Previous, Next, and Switch Session buttons. Choose in **Player Menu Settings** whether it opens directly above the media player, or at a fixed position on the screen (any corner/edge, with distance offsets and slide-in animation direction — like the Notifications placement mod).
 * **Audio Visualizer —** Real-time spectrum bars (WASAPI loopback + FFT) with 5 shapes (Stereo, Mountain, Mirror, Wave, Breathe), 5 color modes, 6 EQ presets, and full size/position/sensitivity control.
 * **Smart Behavior —** Auto-hides when there is no media, in full-screen, or after a configurable idle timeout. Shows again the moment playback resumes.
+* **Multiple Monitors —** Show the player on several taskbars at once (e.g. monitor `1, 2`), and optionally move it to another monitor while a fullscreen app covers its screen.
 
 ### Advanced Customization:
 * **Layout —** Mirror the entire player layout, set min/max width and height, control margins for each element independently.
